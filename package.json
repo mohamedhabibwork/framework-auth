@@ -1,21 +1,29 @@
 {
   "name": "@framework/auth",
   "version": "0.2.0",
-  "description": "Session and personal API token authentication, password hashing, TOTP, and guards.",
   "private": true,
-  "license": "MIT",
-  "type": "module",
+  "description": "Session and personal API token authentication, password hashing, TOTP, and guards.",
   "homepage": "https://github.com/mohamedhabibwork/framework-auth#readme",
+  "bugs": {
+    "url": "https://github.com/mohamedhabibwork/framework/issues"
+  },
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mohamedhabibwork/framework.git",
     "directory": "packages/auth"
   },
-  "bugs": {
-    "url": "https://github.com/mohamedhabibwork/framework/issues"
-  },
+  "type": "module",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
   },
   "dependencies": {
     "@framework/cache": "workspace:*",

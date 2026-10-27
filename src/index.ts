@@ -1,11 +1,7 @@
 // Public API of @framework/auth.
 // Convention: every interface/type lives in `./types`, every constant in
 // `./constants`; runtime values (classes, tokens, functions) stay in their modules.
-export {
-  generateAccountToken,
-  hashAccountToken,
-  PgAccountTokenStore,
-} from './account-token-store';
+export { generateAccountToken, hashAccountToken, PgAccountTokenStore } from './account-token-store';
 export { AuthService } from './auth-service';
 export {
   ACCOUNT_TOKEN_STORE,

@@ -94,6 +94,9 @@ export class PgTokenStore implements ApiTokenStore {
   }
 
   async touch(id: string): Promise<void> {
-    await this.connection.db.update(apiTokens).set({ lastUsedAt: sql`now()` }).where(eq(apiTokens.id, id));
+    await this.connection.db
+      .update(apiTokens)
+      .set({ lastUsedAt: sql`now()` })
+      .where(eq(apiTokens.id, id));
   }
 }
