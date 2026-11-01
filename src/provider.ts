@@ -56,6 +56,8 @@ export function createAuthProvider<TConfig extends { readonly auth: AuthConfig }
   return defineProvider<TConfig>({
     name: 'auth',
     dependsOn: ['database'],
+    // Published as AUTH_RATE_LIMITER when present, so the cache stack must register first.
+    optional: [RATE_LIMITER],
     register({ container, config }) {
       const auth = config.auth;
       const connection = options.connection ?? DATABASE;
