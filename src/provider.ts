@@ -1,11 +1,13 @@
 import { RATE_LIMITER } from '@framework/cache';
-import { type Application, defineProvider, type ServiceProvider } from '@framework/core';
+import { type Application, defineProvider, FrameworkError, type ServiceProvider } from '@framework/core';
 import { DATABASE, type DatabaseConnection } from '@framework/database';
 import type { ActorResolver } from '@framework/http';
+import { getTableName } from 'drizzle-orm';
 import { PgAccountTokenStore } from './account-token-store';
 import { AuthService } from './auth-service';
 import {
   ACCOUNT_TOKEN_STORE,
+  AUTH_GUARDS,
   AUTH_RATE_LIMITER,
   AUTH_SERVICE,
   PASSWORD_HASHER,
@@ -14,17 +16,19 @@ import {
   TOKEN_STORE,
   USER_PROVIDER,
 } from './constants-tokens';
-import { createAuthActorResolver } from './guard';
+import { assertKnownGuards, createAuthActorResolver } from './guard';
 import { BunPasswordHasher } from './hashing';
 import type { JwtAlgorithm, JwtKeySource } from './jwt-guard';
+import { users } from './schema/tables';
 import { PgSessionStore } from './session-store';
 import { PgTokenStore } from './token-store';
 import { PgRecoveryCodeStore } from './totp-store';
-import type { AuthConfig, AuthProviderOptions } from './types';
+import type { AuthConfig, AuthProviderOptions, AuthUser, RegisteredAuthUser } from './types';
 import { DatabaseUserProvider } from './user-provider';
 
 export {
   ACCOUNT_TOKEN_STORE,
+  AUTH_GUARDS,
   AUTH_RATE_LIMITER,
   AUTH_SERVICE,
   PASSWORD_HASHER,
@@ -49,10 +53,17 @@ export {
  * available: their tables ship with the auth migration and the stores bind
  * unconditionally. Actual email delivery stays an application concern via
  * `AuthService`'s `notifiers` hooks (see `@framework/notifications`).
+ *
+ * `TUser` types the options; the DI tokens carry `Register.user`, so declare
+ * that once when a custom `usersTable` adds columns the whole app should see.
  */
-export function createAuthProvider<TConfig extends { readonly auth: AuthConfig }>(
-  options: AuthProviderOptions = {},
-): ServiceProvider<TConfig> {
+export function createAuthProvider<
+  TConfig extends { readonly auth: AuthConfig },
+  TUser extends AuthUser = RegisteredAuthUser,
+>(options: AuthProviderOptions<TUser> = {}): ServiceProvider<TConfig> {
+  const { usersTable, userProvider, hasher, stores, guards, notifiers } =
+    options as unknown as AuthProviderOptions<RegisteredAuthUser>;
+
   return defineProvider<TConfig>({
     name: 'auth',
     dependsOn: ['database'],
@@ -61,10 +72,27 @@ export function createAuthProvider<TConfig extends { readonly auth: AuthConfig }
     register({ container, config }) {
       const auth = config.auth;
       const connection = options.connection ?? DATABASE;
-      container.singleton(PASSWORD_HASHER, () => new BunPasswordHasher());
-      container.singleton(USER_PROVIDER, (r) => new DatabaseUserProvider(r.resolve<DatabaseConnection>(connection)));
-      container.singleton(SESSION_STORE, (r) => new PgSessionStore(r.resolve<DatabaseConnection>(connection)));
-      container.singleton(TOKEN_STORE, (r) => new PgTokenStore(r.resolve<DatabaseConnection>(connection)));
+      if (usersTable && getTableName(usersTable) !== getTableName(users)) {
+        throw new FrameworkError(
+          'AUTH_USERS_TABLE_UNSUPPORTED',
+          `usersTable is "${getTableName(usersTable)}", but the auth tables' foreign keys reference "${getTableName(users)}"; name it "${getTableName(users)}"`,
+        );
+      }
+      assertKnownGuards(auth.guards, guards);
+      container.value(AUTH_GUARDS, guards ?? {});
+      container.singleton(PASSWORD_HASHER, () => hasher ?? new BunPasswordHasher());
+      container.singleton(
+        USER_PROVIDER,
+        (r) => userProvider ?? new DatabaseUserProvider(r.resolve<DatabaseConnection>(connection), usersTable),
+      );
+      container.singleton(
+        SESSION_STORE,
+        (r) => stores?.sessions ?? new PgSessionStore(r.resolve<DatabaseConnection>(connection), usersTable),
+      );
+      container.singleton(
+        TOKEN_STORE,
+        (r) => stores?.tokens ?? new PgTokenStore(r.resolve<DatabaseConnection>(connection), usersTable),
+      );
       container.singleton(
         ACCOUNT_TOKEN_STORE,
         (r) => new PgAccountTokenStore(r.resolve<DatabaseConnection>(connection)),
@@ -83,7 +111,7 @@ export function createAuthProvider<TConfig extends { readonly auth: AuthConfig }
             tokens: r.resolve(TOKEN_STORE),
             accountTokens: r.resolve(ACCOUNT_TOKEN_STORE),
             recoveryCodes: r.resolve(RECOVERY_CODE_STORE),
-            notifiers: options.notifiers,
+            notifiers,
             sessionTtlSeconds: auth.session.ttlSeconds,
             tokenTtlSeconds: auth.token.ttlSeconds,
             verificationTtlSeconds: auth.verification.ttlSeconds,
@@ -107,7 +135,7 @@ export function createAuthProvider<TConfig extends { readonly auth: AuthConfig }
  */
 export function authActorResolver<TConfig extends { readonly auth: AuthConfig }>(
   application: Application<TConfig>,
-  options: Pick<AuthProviderOptions, 'jwt'> = {},
+  options: Pick<AuthProviderOptions, 'jwt' | 'guards'> = {},
 ): ActorResolver {
   let resolver: ActorResolver | undefined;
   return (c) => {
@@ -121,6 +149,10 @@ export function authActorResolver<TConfig extends { readonly auth: AuthConfig }>
         users: application.container.resolve(USER_PROVIDER),
         jwtKeys: options.jwt?.keys,
         jwtAlgorithms: options.jwt?.algorithms,
+        guards: {
+          ...(application.container.has(AUTH_GUARDS) ? application.container.resolve(AUTH_GUARDS) : {}),
+          ...options.guards,
+        },
       },
     );
     return resolver(c);

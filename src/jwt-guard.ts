@@ -1,6 +1,6 @@
 import type { JSONWebKeySet, JWSAlgorithm } from 'jose';
 import { createLocalJWKSet, createRemoteJWKSet, jwtVerify } from 'jose';
-import type { AuthConfig, Principal, UserProvider } from './types';
+import type { AuthConfig, AuthUser, Principal, RegisteredAuthUser, UserProvider } from './types';
 
 export type JwtAlgorithm = JWSAlgorithm;
 
@@ -16,10 +16,10 @@ export interface JwtKeySource {
   readonly cooldownDurationMs?: number;
 }
 
-export interface JwtGuardDeps {
+export interface JwtGuardDeps<TUser extends AuthUser = RegisteredAuthUser> {
   readonly config: AuthConfig['jwt'];
   readonly keys: JwtKeySource;
-  readonly users: UserProvider;
+  readonly users: UserProvider<TUser>;
   readonly algorithms?: readonly JwtAlgorithm[];
 }
 
@@ -45,9 +45,9 @@ const abilitiesFrom = (payload: Record<string, unknown>): readonly string[] => {
  * provision one. Any verification failure resolves null (the request stays
  * anonymous; route guards answer 401).
  */
-export function createJwtPrincipalResolver(
-  deps: JwtGuardDeps,
-): (header: string | undefined) => Promise<Principal | null> {
+export function createJwtPrincipalResolver<TUser extends AuthUser = RegisteredAuthUser>(
+  deps: JwtGuardDeps<TUser>,
+): (header: string | undefined) => Promise<Principal<TUser> | null> {
   const { jwksUri, jwks } = deps.keys;
   if (!jwksUri && !jwks) {
     throw new Error(

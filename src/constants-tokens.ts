@@ -3,6 +3,7 @@ import { token } from '@framework/core';
 import type {
   AccountTokenStore,
   ApiTokenStore,
+  AuthGuard,
   AuthService,
   PasswordHasher,
   RecoveryCodeStore,
@@ -19,6 +20,8 @@ export const ACCOUNT_TOKEN_STORE = token<AccountTokenStore>('auth.account-token-
 /** One-time TOTP recovery codes. */
 export const RECOVERY_CODE_STORE = token<RecoveryCodeStore>('auth.recovery-code-store');
 export const AUTH_SERVICE = token<AuthService>('auth.service');
+/** Custom guards given to `createAuthProvider`, read by `authActorResolver`. */
+export const AUTH_GUARDS = token<Readonly<Record<string, AuthGuard>>>('auth.guards');
 /**
  * Login rate limiter, published by `createAuthProvider` only when the
  * application bound `@framework/cache`'s `RATE_LIMITER` and

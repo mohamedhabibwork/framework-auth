@@ -2,8 +2,15 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { DatabaseConnection } from '@framework/database';
 import { and, eq, gt, lt, sql } from 'drizzle-orm';
 import { SECRET_BYTES } from './constants';
-import { sessions, users } from './schema/tables';
-import type { IssuedSession, ResolvedSession, SessionStore } from './types';
+import { defaultUsersTable, sessions, type users } from './schema/tables';
+import type {
+  AuthUser,
+  AuthUsersTable,
+  IssuedSession,
+  RegisteredAuthUser,
+  ResolvedSession,
+  SessionStore,
+} from './types';
 
 /** Opaque cookie value: prefix + 256 bits of entropy (base64url). */
 export const generateSessionToken = (): string => `fw_sess_${randomBytes(SECRET_BYTES).toString('base64url')}`;
@@ -25,8 +32,15 @@ const sessionColumns = {
  * PostgreSQL-backed sessions. Expiry filtering happens in SQL
  * (`expires_at > now()`); string-mode columns come back as written.
  */
-export class PgSessionStore implements SessionStore {
-  constructor(private readonly connection: DatabaseConnection) {}
+export class PgSessionStore<TUser extends AuthUser = RegisteredAuthUser> implements SessionStore<TUser> {
+  readonly #users: typeof users;
+
+  constructor(
+    private readonly connection: DatabaseConnection,
+    usersTable: AuthUsersTable<TUser> = defaultUsersTable<TUser>(),
+  ) {
+    this.#users = usersTable as unknown as typeof users;
+  }
 
   async create(userId: string, ttlSeconds: number): Promise<IssuedSession> {
     const token = generateSessionToken();
@@ -39,15 +53,15 @@ export class PgSessionStore implements SessionStore {
     return { token, session };
   }
 
-  async find(token: string): Promise<ResolvedSession | null> {
+  async find(token: string): Promise<ResolvedSession<TUser> | null> {
     const rows = await this.connection.db
-      .select({ session: sessionColumns, user: users })
+      .select({ session: sessionColumns, user: this.#users })
       .from(sessions)
-      .innerJoin(users, eq(users.id, sessions.userId))
+      .innerJoin(this.#users, eq(this.#users.id, sessions.userId))
       .where(and(eq(sessions.tokenHash, hashToken(token)), gt(sessions.expiresAt, sql`now()`)))
       .limit(1);
     const row = rows[0];
-    return row ? { session: row.session, user: row.user } : null;
+    return row ? { session: row.session, user: row.user as unknown as TUser } : null;
   }
 
   async rotate(currentToken: string, ttlSeconds: number): Promise<IssuedSession | null> {

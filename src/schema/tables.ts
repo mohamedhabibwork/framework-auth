@@ -1,13 +1,12 @@
 import type { InferSelectModel } from 'drizzle-orm';
 import { index, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import type { AuthUser, AuthUsersTable } from '../types';
 
 /**
- * Framework-owned identity tables. Applications re-export them from their
- * schema index so Drizzle Kit generates their migration with the app's other
- * tables (same pattern as `audit_logs`). Applications with a custom user
- * store keep their own table and swap the `UserProvider` instead.
+ * The columns auth reads and writes. An application adds its own by declaring
+ * its table with them: `pgTable('users', { ...authUserColumns(), plan: text('plan') })`.
  */
-export const users = pgTable('users', {
+export const authUserColumns = () => ({
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
   email: text('email').notNull().unique(),
@@ -21,6 +20,19 @@ export const users = pgTable('users', {
     .defaultNow()
     .$onUpdate(() => new Date().toISOString()),
 });
+
+/**
+ * Framework-owned identity tables. Applications re-export them from their
+ * schema index so Drizzle Kit generates their migration with the app's other
+ * tables (same pattern as `audit_logs`). An application that adds columns
+ * exports its own `users` table instead (see `createAuthProvider`'s
+ * `usersTable`); one with a custom user store swaps the `UserProvider`.
+ */
+export const users = pgTable('users', authUserColumns());
+
+/** `users`, as the table a store over `TUser` joins when none is passed. */
+export const defaultUsersTable = <TUser extends AuthUser>(): AuthUsersTable<TUser> =>
+  users as unknown as AuthUsersTable<TUser>;
 
 /**
  * Server-side session state. The cookie carries an opaque random value; only

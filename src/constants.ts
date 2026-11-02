@@ -1,8 +1,9 @@
 /** Constants of `@framework/auth`: tokens and fixed defaults. */
 
-export { authConfigSchema, defaultAuthConfig } from './config-schema';
+export { authConfigSchema, authGuardsSchema, defaultAuthConfig } from './config-schema';
 export {
   ACCOUNT_TOKEN_STORE,
+  AUTH_GUARDS,
   AUTH_RATE_LIMITER,
   AUTH_SERVICE,
   PASSWORD_HASHER,

@@ -1,5 +1,15 @@
 import { z } from 'zod/v4';
-import type { AuthConfig } from './types';
+import type { AuthConfig, AuthGuardName } from './types';
+
+/**
+ * The `guards` field for an app with its own guards, which keeps config-time
+ * validation: `authConfigSchema.extend({ guards: authGuardsSchema('partner-api') })`.
+ */
+export const authGuardsSchema = (...custom: readonly string[]): z.ZodType<AuthGuardName[]> =>
+  z
+    .array(z.enum(['session', 'api-token', 'jwt', ...custom]))
+    .min(1)
+    .default(['session', 'api-token']) as unknown as z.ZodType<AuthGuardName[]>;
 
 /**
  * Validated shape of the application's `auth` configuration section. Apps

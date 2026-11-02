@@ -1,8 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { DatabaseConnection } from '@framework/database';
 import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
-import { apiTokens, users } from './schema/tables';
-import type { ApiTokenRecord, ApiTokenStore, IssuedToken, UserRecord } from './types';
+import { apiTokens, defaultUsersTable, type users } from './schema/tables';
+import type { ApiTokenRecord, ApiTokenStore, AuthUser, AuthUsersTable, IssuedToken, RegisteredAuthUser } from './types';
 
 /** Plaintext prefix + 160 bits of entropy (hex) — recognizable by scanners. */
 export const generateApiToken = (prefix: string): string => `${prefix}${randomBytes(20).toString('hex')}`;
@@ -26,8 +26,15 @@ const tokenColumns = {
  * PostgreSQL-backed personal API tokens. `find` resolves only unrevoked,
  * unexpired tokens (checked in SQL) joined with their user.
  */
-export class PgTokenStore implements ApiTokenStore {
-  constructor(private readonly connection: DatabaseConnection) {}
+export class PgTokenStore<TUser extends AuthUser = RegisteredAuthUser> implements ApiTokenStore<TUser> {
+  readonly #users: typeof users;
+
+  constructor(
+    private readonly connection: DatabaseConnection,
+    usersTable: AuthUsersTable<TUser> = defaultUsersTable<TUser>(),
+  ) {
+    this.#users = usersTable as unknown as typeof users;
+  }
 
   async issue(
     userId: string,
@@ -51,11 +58,11 @@ export class PgTokenStore implements ApiTokenStore {
     return { token, plaintext };
   }
 
-  async find(plaintext: string): Promise<{ token: ApiTokenRecord; user: UserRecord } | null> {
+  async find(plaintext: string): Promise<{ token: ApiTokenRecord; user: TUser } | null> {
     const rows = await this.connection.db
-      .select({ token: tokenColumns, user: users })
+      .select({ token: tokenColumns, user: this.#users })
       .from(apiTokens)
-      .innerJoin(users, eq(users.id, apiTokens.userId))
+      .innerJoin(this.#users, eq(this.#users.id, apiTokens.userId))
       .where(
         and(
           eq(apiTokens.tokenHash, hashApiToken(plaintext)),
@@ -64,7 +71,8 @@ export class PgTokenStore implements ApiTokenStore {
         ),
       )
       .limit(1);
-    return rows[0] ?? null;
+    const row = rows[0];
+    return row ? { token: row.token, user: row.user as unknown as TUser } : null;
   }
 
   async listForUser(userId: string): Promise<readonly ApiTokenRecord[]> {

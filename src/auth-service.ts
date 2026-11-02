@@ -5,13 +5,14 @@ import type {
   AttemptResult,
   AuthNotifiers,
   AuthServiceDeps,
+  AuthUser,
   IssuedToken,
   IssueTokenInput,
   LoginStart,
   PasswordHasher,
   Principal,
+  RegisteredAuthUser,
   RegisterInput,
-  UserRecord,
 } from './types';
 
 /** First-attempt dummy hash so unknown emails cost the same as known ones. */
@@ -30,8 +31,8 @@ const timingDummyVerify = (hasher: PasswordHasher, password: string): Promise<bo
  * dep — the methods fail fast with a clear message when the wiring is
  * missing, never silently.
  */
-export class AuthService {
-  constructor(private readonly deps: AuthServiceDeps) {}
+export class AuthService<TUser extends AuthUser = RegisteredAuthUser> {
+  constructor(private readonly deps: AuthServiceDeps<TUser>) {}
 
   #accountTokens(): AccountTokenStore {
     if (!this.deps.accountTokens) {
@@ -42,14 +43,14 @@ export class AuthService {
     return this.deps.accountTokens;
   }
 
-  async register(input: RegisterInput): Promise<UserRecord> {
+  async register(input: RegisterInput): Promise<TUser> {
     const passwordHash = await this.deps.hasher.hash(input.password);
     // Insert directly (provider lookups are read contracts); a duplicate
     // email raises SQLSTATE 23505, which the error handler maps to 409.
     return this.deps.users.create({ ...input, passwordHash });
   }
 
-  async attempt(email: string, password: string): Promise<AttemptResult | null> {
+  async attempt(email: string, password: string): Promise<AttemptResult<TUser> | null> {
     const start = await this.startLogin(email, password);
     if (start?.kind !== 'session') return null;
     return { user: start.user, sessionId: start.sessionId, sessionToken: start.sessionToken };
@@ -62,7 +63,7 @@ export class AuthService {
    * credentials resolve null after the same dummy-verify work, so response
    * timing does not reveal which failed.
    */
-  async startLogin(email: string, password: string): Promise<LoginStart | null> {
+  async startLogin(email: string, password: string): Promise<LoginStart<TUser> | null> {
     const user = await this.deps.users.findByEmail(email);
     const ok = user
       ? await this.deps.hasher.verify(password, user.passwordHash)
@@ -85,7 +86,7 @@ export class AuthService {
    * attempt per login, so code guessing is bounded by the throttled login
    * rate), then accepts a TOTP code or a one-time recovery code.
    */
-  async completeTwoStep(challenge: string, code: string): Promise<AttemptResult | null> {
+  async completeTwoStep(challenge: string, code: string): Promise<AttemptResult<TUser> | null> {
     const userId = await this.#accountTokens().consume(challenge, 'two-step');
     if (!userId) return null;
     const user = await this.deps.users.findById(userId);
@@ -97,7 +98,7 @@ export class AuthService {
     return { user, sessionId: issued.session.id, sessionToken: issued.token };
   }
 
-  async issueToken(user: Pick<UserRecord, 'id'>, input: IssueTokenInput): Promise<IssuedToken> {
+  async issueToken(user: Pick<AuthUser, 'id'>, input: IssueTokenInput): Promise<IssuedToken> {
     return this.deps.tokens.issue(
       user.id,
       input.name,
@@ -119,7 +120,7 @@ export class AuthService {
     return this.deps.tokens.revoke(id, userId);
   }
 
-  async logout(principal: Principal): Promise<boolean> {
+  async logout(principal: Principal<TUser>): Promise<boolean> {
     if (principal.via === 'session' && principal.sessionId) {
       return this.deps.sessions.revokeById(principal.sessionId);
     }
@@ -145,7 +146,7 @@ export class AuthService {
    * either way (custom delivery, tests); never log or return it in a
    * response.
    */
-  async requestEmailVerification(user: UserRecord): Promise<string> {
+  async requestEmailVerification(user: TUser): Promise<string> {
     const token = await this.#accountTokens().issue(
       user.id,
       'email-verification',
@@ -156,7 +157,7 @@ export class AuthService {
   }
 
   /** Consumes the token and stamps `email_verified_at`; null when invalid/used/expired. */
-  async verifyEmail(token: string): Promise<UserRecord | null> {
+  async verifyEmail(token: string): Promise<TUser | null> {
     const userId = await this.#accountTokens().consume(token, 'email-verification');
     if (!userId) return null;
     await this.deps.users.markEmailVerified(userId);
@@ -200,7 +201,7 @@ export class AuthService {
    * when `enableTotp` verifies the first code, so a lost QR code never
    * locks the account.
    */
-  async startTotpEnrollment(user: UserRecord): Promise<{ readonly secret: string; readonly uri: string }> {
+  async startTotpEnrollment(user: TUser): Promise<{ readonly secret: string; readonly uri: string }> {
     const secret = generateTotpSecret();
     await this.deps.users.setTotpSecret(user.id, secret);
     return { secret, uri: totpUri(secret, user.email, this.deps.totpIssuer ?? 'Framework') };

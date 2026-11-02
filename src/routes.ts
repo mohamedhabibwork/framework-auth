@@ -16,7 +16,7 @@ import { z } from 'zod/v4';
 import { defaultAuthConfig } from './config-schema';
 import { requireAuth } from './middleware';
 import { authPrincipal } from './principals';
-import type { ApiTokenRecord, AuthRoutesDeps, UserRecord } from './types';
+import type { ApiTokenRecord, AuthRoutesDeps, AuthUser } from './types';
 
 export const registerSchema = z.object({
   name: z.string().trim().min(1).max(120),
@@ -50,7 +50,7 @@ export const twoStepSchema = z
 export const totpCodeSchema = z.object({ code: z.string().min(6).max(32) }).strict();
 
 /** Public projection — `passwordHash`, `totpSecret` and raw timestamps never leave. */
-export const publicUser = (user: UserRecord) => ({
+export const publicUser = (user: AuthUser) => ({
   id: user.id,
   name: user.name,
   email: user.email,

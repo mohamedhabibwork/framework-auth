@@ -4,11 +4,20 @@
  */
 
 import type { RateLimiter } from '@framework/cache';
+import type { Register } from '@framework/core';
 import type { DatabaseConnection, SelectOf } from '@framework/database';
+import type { FrameworkEnv } from '@framework/http';
+import type { AnyPgColumn, PgTable } from 'drizzle-orm/pg-core';
+import type { Context } from 'hono';
 
 // -- Configuration -----------------------------------------------------------
 
-export type AuthGuardName = 'session' | 'api-token' | 'jwt';
+export type BuiltInAuthGuardName = 'session' | 'api-token' | 'jwt';
+
+/** Built-in guards plus any the application declares as `Register.guards`. */
+export type AuthGuardName =
+  | BuiltInAuthGuardName
+  | (Register extends { readonly guards: infer TGuards extends string } ? TGuards : never);
 
 /** Validated `auth` section of the application configuration. */
 export interface AuthConfig {
@@ -57,6 +66,32 @@ export interface AuthConfig {
 /** Row of the framework-owned `users` table. */
 export type UserRecord = SelectOf<typeof import('./schema/tables').users>;
 
+/** What auth reads from a user row. Applications may add columns, not remove these. */
+export interface AuthUser {
+  readonly id: string;
+  readonly name: string;
+  readonly email: string;
+  readonly emailVerifiedAt: string | null;
+  readonly passwordHash: string;
+  readonly totpSecret: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/**
+ * The application's user row when `Register.user` is declared, else
+ * {@link UserRecord}. A declared type missing an {@link AuthUser} column is
+ * ignored, so declare it as `typeof table.$inferSelect` over `authUserColumns()`.
+ */
+export type RegisteredAuthUser = Register extends { readonly user: infer TUser extends AuthUser } ? TUser : UserRecord;
+
+/** A Drizzle table whose rows are `TUser`, declared with `authUserColumns()`. */
+export type AuthUsersTable<TUser extends AuthUser = RegisteredAuthUser> = PgTable & {
+  readonly $inferSelect: TUser;
+  readonly id: AnyPgColumn;
+  readonly email: AnyPgColumn;
+};
+
 /** Row of the framework-owned `sessions` table (never carries the token hash). */
 export type SessionRecord = Omit<SelectOf<typeof import('./schema/tables').sessions>, 'tokenHash'>;
 
@@ -73,9 +108,9 @@ export type TotpRecoveryCodeRecord = Omit<SelectOf<typeof import('./schema/table
 export type AccountTokenPurpose = 'email-verification' | 'password-reset' | 'two-step';
 
 /** A session row joined with its user, as returned by `SessionStore.find`. */
-export interface ResolvedSession {
+export interface ResolvedSession<TUser extends AuthUser = RegisteredAuthUser> {
   readonly session: SessionRecord;
-  readonly user: UserRecord;
+  readonly user: TUser;
 }
 
 // -- Principal ----------------------------------------------------------------
@@ -85,11 +120,11 @@ export interface ResolvedSession {
  * satisfies `@framework/http`'s `PrincipalLike`. Session principals hold
  * `['*']` abilities; API token principals carry their declared abilities.
  */
-export interface Principal {
+export interface Principal<TUser extends AuthUser = RegisteredAuthUser> {
   readonly id: string;
   readonly via: AuthGuardName;
   readonly abilities: readonly string[];
-  readonly user: UserRecord;
+  readonly user: TUser;
   /** Present when `via` is `session`. */
   readonly sessionId?: string;
   /** Present when `via` is `api-token`. */
@@ -97,6 +132,11 @@ export interface Principal {
 }
 
 // -- Contracts ----------------------------------------------------------------
+
+/** Authenticates a request; null passes to the next configured guard. */
+export type AuthGuard<TUser extends AuthUser = RegisteredAuthUser> = (
+  c: Context<FrameworkEnv>,
+) => Promise<Principal<TUser> | null>;
 
 /** Password hashing abstraction (argon2id in production, fakes in tests). */
 export interface PasswordHasher {
@@ -109,10 +149,10 @@ export interface PasswordHasher {
  * this out (`create` backs the default registration route and must persist
  * the already-hashed password).
  */
-export interface UserProvider {
-  findById(id: string): Promise<UserRecord | null>;
-  findByEmail(email: string): Promise<UserRecord | null>;
-  create(input: { readonly name: string; readonly email: string; readonly passwordHash: string }): Promise<UserRecord>;
+export interface UserProvider<TUser extends AuthUser = RegisteredAuthUser> {
+  findById(id: string): Promise<TUser | null>;
+  findByEmail(email: string): Promise<TUser | null>;
+  create(input: { readonly name: string; readonly email: string; readonly passwordHash: string }): Promise<TUser>;
   /** Persists a new password hash (password recovery). */
   updatePasswordHash(id: string, passwordHash: string): Promise<void>;
   /** Stamps `email_verified_at` (email verification). */
@@ -131,9 +171,9 @@ export interface IssuedSession {
  * Server-side session state: creation, resolution (expiry-filtered, user
  * joined), rotation on login, revocation and pruning.
  */
-export interface SessionStore {
+export interface SessionStore<TUser extends AuthUser = RegisteredAuthUser> {
   create(userId: string, ttlSeconds: number): Promise<IssuedSession>;
-  find(token: string): Promise<ResolvedSession | null>;
+  find(token: string): Promise<ResolvedSession<TUser> | null>;
   /** Invalidates `currentToken` and creates a fresh session in one transaction. */
   rotate(currentToken: string, ttlSeconds: number): Promise<IssuedSession | null>;
   revoke(token: string): Promise<boolean>;
@@ -157,9 +197,9 @@ export interface IssuedToken {
  * Personal API tokens: hashed at rest, ability-scoped, expirable and
  * revocable. `find` only resolves unrevoked, unexpired tokens.
  */
-export interface ApiTokenStore {
+export interface ApiTokenStore<TUser extends AuthUser = RegisteredAuthUser> {
   issue(userId: string, name: string, abilities: readonly string[], ttlSeconds: number | null): Promise<IssuedToken>;
-  find(plaintext: string): Promise<{ readonly token: ApiTokenRecord; readonly user: UserRecord } | null>;
+  find(plaintext: string): Promise<{ readonly token: ApiTokenRecord; readonly user: TUser } | null>;
   listForUser(userId: string): Promise<readonly ApiTokenRecord[]>;
   /** Revokes only when the token belongs to `userId`. */
   revoke(id: string, userId: string): Promise<boolean>;
@@ -173,18 +213,18 @@ export interface RegisterInput {
   readonly password: string;
 }
 
-export interface AttemptResult {
-  readonly user: UserRecord;
+export interface AttemptResult<TUser extends AuthUser = RegisteredAuthUser> {
+  readonly user: TUser;
   readonly sessionId: string;
   readonly sessionToken: string;
 }
 
 /** First factor outcome of `AuthService.startLogin`. */
-export type LoginStart =
-  | ({ readonly kind: 'session' } & AttemptResult)
+export type LoginStart<TUser extends AuthUser = RegisteredAuthUser> =
+  | ({ readonly kind: 'session' } & AttemptResult<TUser>)
   | {
       readonly kind: 'two-step';
-      readonly user: UserRecord /** Single-use, short-lived challenge token. */;
+      readonly user: TUser /** Single-use, short-lived challenge token. */;
       readonly challenge: string;
     };
 
@@ -219,28 +259,28 @@ export interface RecoveryCodeStore {
 }
 
 /** Delivery hooks the application wires to `@framework/notifications`. */
-export interface AuthNotifiers {
+export interface AuthNotifiers<TUser extends AuthUser = RegisteredAuthUser> {
   /** Delivers the email-verification link/token (queued by the app). */
-  readonly emailVerification?: (user: UserRecord, token: string) => Promise<void>;
+  readonly emailVerification?: (user: TUser, token: string) => Promise<void>;
   /** Delivers the password-reset link/token (queued by the app). */
-  readonly passwordReset?: (user: UserRecord, token: string) => Promise<void>;
+  readonly passwordReset?: (user: TUser, token: string) => Promise<void>;
 }
 
 /**
  * The `AuthService` class (see ./auth-service) is both implementation and
  * public contract; its dependencies are defined here for tests and fakes.
  */
-export interface AuthServiceDeps {
+export interface AuthServiceDeps<TUser extends AuthUser = RegisteredAuthUser> {
   readonly hasher: PasswordHasher;
-  readonly users: UserProvider;
-  readonly sessions: SessionStore;
-  readonly tokens: ApiTokenStore;
+  readonly users: UserProvider<TUser>;
+  readonly sessions: SessionStore<TUser>;
+  readonly tokens: ApiTokenStore<TUser>;
   /** Single-use verification/recovery/two-step tokens (optional until wired). */
   readonly accountTokens?: AccountTokenStore;
   /** One-time TOTP recovery codes (optional until wired). */
   readonly recoveryCodes?: RecoveryCodeStore;
   /** App delivery hooks for verification/recovery emails (optional). */
-  readonly notifiers?: AuthNotifiers;
+  readonly notifiers?: AuthNotifiers<TUser>;
   readonly sessionTtlSeconds: number;
   readonly tokenTtlSeconds: number | null;
   /** Lifetime of email-verification tokens. Default 3600. */
@@ -254,11 +294,27 @@ export interface AuthServiceDeps {
 }
 
 /** Options for `createAuthProvider` (see provider.ts). */
-export interface AuthProviderOptions {
+export interface AuthProviderOptions<TUser extends AuthUser = RegisteredAuthUser> {
   /** Connection token to build stores on; defaults to `DATABASE`. */
   readonly connection?: Token<DatabaseConnection>;
+  /**
+   * The application's users table when it adds columns to the framework's.
+   * It must be named `users`, because the auth tables' foreign keys point there.
+   */
+  readonly usersTable?: AuthUsersTable<TUser>;
+  /** Replaces the default user store (needed when `create` must set extra required columns). */
+  readonly userProvider?: UserProvider<TUser>;
+  /** Replaces the default argon2id hasher. */
+  readonly hasher?: PasswordHasher;
+  /** Replaces the PostgreSQL session or API token store. */
+  readonly stores?: {
+    readonly sessions?: SessionStore<TUser>;
+    readonly tokens?: ApiTokenStore<TUser>;
+  };
+  /** Guards beyond the built-in ones, by the name `auth.guards` lists them under. */
+  readonly guards?: Readonly<Record<string, AuthGuard<TUser>>>;
   /** Delivery hooks handed to the `AuthService` (queued by the app via `@framework/notifications`). */
-  readonly notifiers?: AuthNotifiers;
+  readonly notifiers?: AuthNotifiers<TUser>;
   /**
    * JWT guard key material and algorithm allowlist, used when `auth.guards`
    * includes `'jwt'`. Without it (and without `auth.jwt.jwksUri`) the guard
@@ -271,10 +327,10 @@ export interface AuthProviderOptions {
 }
 
 /** Options for `createAuthActorResolver` (see guard.ts). */
-export interface AuthGuardDeps {
+export interface AuthGuardDeps<TUser extends AuthUser = RegisteredAuthUser> {
   readonly config: AuthConfig;
-  readonly sessions: SessionStore;
-  readonly tokens: ApiTokenStore;
+  readonly sessions: SessionStore<TUser>;
+  readonly tokens: ApiTokenStore<TUser>;
 }
 
 import type { Token } from '@framework/core';

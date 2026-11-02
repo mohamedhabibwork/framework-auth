@@ -5,9 +5,11 @@ export { generateAccountToken, hashAccountToken, PgAccountTokenStore } from './a
 export { AuthService } from './auth-service';
 export {
   ACCOUNT_TOKEN_STORE,
+  AUTH_GUARDS,
   AUTH_RATE_LIMITER,
   AUTH_SERVICE,
   authConfigSchema,
+  authGuardsSchema,
   defaultAuthConfig,
   PASSWORD_HASHER,
   RECOVERY_CODE_STORE,
@@ -35,7 +37,7 @@ export {
   verifyEmailSchema,
 } from './routes';
 export type { AccountTokenRow, ApiTokenRow, SessionRow, TotpRecoveryCodeRow, UserRow } from './schema/tables';
-export { accountTokens, sessions, totpRecoveryCodes, users } from './schema/tables';
+export { accountTokens, authUserColumns, sessions, totpRecoveryCodes, users } from './schema/tables';
 export { generateSessionToken, hashToken, PgSessionStore } from './session-store';
 export { generateApiToken, hashApiToken, PgTokenStore } from './token-store';
 export {
@@ -59,12 +61,16 @@ export type {
   ApiTokenStore,
   AttemptResult,
   AuthConfig,
+  AuthGuard,
   AuthGuardDeps,
   AuthGuardName,
   AuthNotifiers,
   AuthProviderOptions,
   AuthRoutesDeps,
   AuthServiceDeps,
+  AuthUser,
+  AuthUsersTable,
+  BuiltInAuthGuardName,
   IssuedSession,
   IssuedToken,
   IssueTokenInput,
@@ -72,6 +78,7 @@ export type {
   PasswordHasher,
   Principal,
   RecoveryCodeStore,
+  RegisteredAuthUser,
   RegisterInput,
   ResolvedSession,
   SessionRecord,
