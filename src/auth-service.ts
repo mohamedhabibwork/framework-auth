@@ -69,6 +69,14 @@ export class AuthService<TUser extends AuthUser = RegisteredAuthUser> {
       ? await this.deps.hasher.verify(password, user.passwordHash)
       : await timingDummyVerify(this.deps.hasher, password);
     if (!user || !ok) return null;
+    return this.startLoginFor(user);
+  }
+
+  /**
+   * The login that follows a first factor proved elsewhere, such as a social
+   * provider: a session, or a two-step challenge for a user with TOTP enabled.
+   */
+  async startLoginFor(user: TUser): Promise<LoginStart<TUser>> {
     if (user.totpSecret) {
       const challenge = await this.#accountTokens().issue(
         user.id,
